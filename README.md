@@ -4,7 +4,7 @@
 
 # BepInEx.MelonLoader.Loader
 
-Current version supports MelonLoader **0.5.7**.
+Current version supports MelonLoader **0.7.1**.
 
 Loader for BepInEx to be able to use MelonLoader plugins.
 

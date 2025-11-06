@@ -9,8 +9,11 @@ using BepInEx.Logging;
 using MelonLoader;
 using MelonLoader.Utils;
 using MonoMod.RuntimeDetour;
-using ColorARGB = MelonLoader.Bootstrap.Logging.ColorARGB;
+using ColorARGB = global::MelonLoader.Logging.ColorARGB;
 using Tomlet;
+using LoaderConfig = global::MelonLoader.LoaderConfig;
+using MelonLaunchOptions = global::MelonLoader.MelonLaunchOptions;
+using MelonEnvironment = global::MelonLoader.Utils.MelonEnvironment;
 
 namespace BepInEx.MelonLoader.Loader.Shared;
 
@@ -20,19 +23,50 @@ internal static class BootstrapShim
     private static bool _isInitialized;
     private static readonly ManualLogSource Log = Logger.CreateLogSource("MelonLoaderBootstrap");
 
-    private static readonly Dictionary<nint, DetourState> Detours = new();
+    private static readonly Dictionary<IntPtr, DetourState> Detours = new();
 
     private sealed class DetourState
     {
         public NativeDetour Detour { get; set; }
-        public nint OriginalTarget { get; set; }
+        public IntPtr OriginalTarget { get; set; }
     }
 
-    private static nint _monoRuntimeHandle;
+    private static IntPtr _monoRuntimeHandle;
     private static MonoGetRootDomainDelegate _monoGetRootDomain;
     private static MonoDomainGetDelegate _monoDomainGet;
     private static ResolveEventHandler _monoResolveHandler;
     private static Func<string, Assembly> _monoSearchDirectoryScan;
+
+    // Helper to check if string is null or whitespace (for .NET 3.5 compatibility)
+    private static bool IsNullOrWhiteSpace(string value)
+    {
+        return string.IsNullOrEmpty(value) || value.Trim().Length == 0;
+    }
+
+    // Helper to set properties with internal setters via reflection
+    private static void SetInternalProperty(object target, string propertyName, object value)
+    {
+        var property = target.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
+        if (property != null && property.CanWrite)
+        {
+            property.SetValue(target, value, null);
+        }
+    }
+
+    // Helper for Enum.TryParse (.NET 3.5 compatibility)
+    private static bool TryParseEnum<T>(string value, bool ignoreCase, out T result) where T : struct
+    {
+        try
+        {
+            result = (T)Enum.Parse(typeof(T), value, ignoreCase);
+            return true;
+        }
+        catch
+        {
+            result = default(T);
+            return false;
+        }
+    }
 
     internal static void EnsureInitialized()
     {
@@ -46,7 +80,7 @@ internal static class BootstrapShim
 
             EnsureDirectoryLayout();
 
-            var melonAssembly = typeof(MelonLoader.MelonLaunchOptions).Assembly;
+            var melonAssembly = typeof(MelonLaunchOptions).Assembly;
             var bootstrapLibraryType = melonAssembly.GetType("MelonLoader.InternalUtils.BootstrapLibrary", throwOnError: true);
             var library = Activator.CreateInstance(bootstrapLibraryType, nonPublic: true);
 
@@ -63,7 +97,7 @@ internal static class BootstrapShim
 
             var bootstrapInteropType = melonAssembly.GetType("MelonLoader.InternalUtils.BootstrapInterop", throwOnError: true);
             var libraryProperty = bootstrapInteropType.GetProperty("Library", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
-            libraryProperty?.SetValue(null, library);
+            libraryProperty?.SetValue(null, library, null);
 
             _isInitialized = true;
         }
@@ -91,7 +125,7 @@ internal static class BootstrapShim
         try
         {
             var delegateInstance = Delegate.CreateDelegate(property.PropertyType, method);
-            property.SetValue(target, delegateInstance);
+            property.SetValue(target, delegateInstance, null);
         }
         catch (Exception ex)
         {
@@ -101,7 +135,7 @@ internal static class BootstrapShim
 
     internal static bool RunMelonLoader(Action<string> errorLogger)
     {
-        var melonAssembly = typeof(MelonLoader.MelonLaunchOptions).Assembly;
+        var melonAssembly = typeof(MelonLaunchOptions).Assembly;
         var coreType = melonAssembly.GetType("MelonLoader.Core", throwOnError: true);
         var initializeMethod = coreType.GetMethod("Initialize", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null, Type.EmptyTypes, null);
         var startMethod = coreType.GetMethod("Start", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null, Type.EmptyTypes, null);
@@ -132,13 +166,13 @@ internal static class BootstrapShim
         var configuredBaseDir = ArgParser.GetValue("melonloader.basedir");
         string baseRoot;
 
-        if (!string.IsNullOrWhiteSpace(configuredBaseDir) && Directory.Exists(configuredBaseDir))
+        if (!IsNullOrWhiteSpace(configuredBaseDir) && Directory.Exists(configuredBaseDir))
         {
             baseRoot = Path.GetFullPath(configuredBaseDir);
         }
         else
         {
-            baseRoot = Paths.GameRootPath ?? AppContext.BaseDirectory;
+            baseRoot = Paths.GameRootPath ?? AppDomain.CurrentDomain.BaseDirectory;
         }
 
         return Path.Combine(baseRoot, "MLLoader");
@@ -154,13 +188,13 @@ internal static class BootstrapShim
         Directory.CreateDirectory(Path.Combine(baseDir, "UserData"));
         Directory.CreateDirectory(Path.Combine(baseDir, "UserLibs"));
         Directory.CreateDirectory(Path.Combine(baseDir, "MelonLoader"));
-        Directory.CreateDirectory(Path.Combine(baseDir, "MelonLoader", "Dependencies"));
-        Directory.CreateDirectory(Path.Combine(baseDir, "MelonLoader", "Il2CppAssemblies"));
+        Directory.CreateDirectory(Path.Combine(Path.Combine(baseDir, "MelonLoader"), "Dependencies"));
+        Directory.CreateDirectory(Path.Combine(Path.Combine(baseDir, "MelonLoader"), "Il2CppAssemblies"));
     }
 
-    private static unsafe void NativeHookAttach(nint* target, nint detour)
+    private static unsafe void NativeHookAttach(IntPtr* target, IntPtr detour)
     {
-        if (target == null || *target == 0 || detour == 0)
+        if (target == null || *target == IntPtr.Zero || detour == IntPtr.Zero)
             throw new ArgumentException("Invalid native hook arguments.");
 
         var originalPtr = *target;
@@ -172,23 +206,24 @@ internal static class BootstrapShim
 
         detourInstance.Apply();
 
-        var trampolinePtr = detourInstance.GenerateTrampoline();
+        var trampolineMethod = detourInstance.GenerateTrampoline();
+        var trampolinePtr = trampolineMethod.MethodHandle.GetFunctionPointer();
 
         lock (Detours)
         {
-            Detours[(nint)trampolinePtr] = new DetourState
+            Detours[trampolinePtr] = new DetourState
             {
                 Detour = detourInstance,
                 OriginalTarget = originalPtr
             };
         }
 
-        *target = (nint)trampolinePtr;
+        *target = trampolinePtr;
     }
 
-    private static unsafe void NativeHookDetach(nint* target, nint detour)
+    private static unsafe void NativeHookDetach(IntPtr* target, IntPtr detour)
     {
-        if (target == null || *target == 0)
+        if (target == null || *target == IntPtr.Zero)
             return;
 
         var trampoline = *target;
@@ -291,60 +326,60 @@ internal static class BootstrapShim
         AppDomain.CurrentDomain.AssemblyResolve += _monoResolveHandler;
     }
 
-    private static nint MonoGetDomainPtr()
+    private static IntPtr MonoGetDomainPtr()
     {
         var handle = EnsureMonoRuntimeHandle();
-        if (handle == nint.Zero)
-            return nint.Zero;
+        if (handle == IntPtr.Zero)
+            return IntPtr.Zero;
 
         EnsureMonoDelegates(handle);
 
-        var domain = _monoGetRootDomain != null ? _monoGetRootDomain() : nint.Zero;
-        if (domain == nint.Zero && _monoDomainGet != null)
+        var domain = _monoGetRootDomain != null ? _monoGetRootDomain() : IntPtr.Zero;
+        if (domain == IntPtr.Zero && _monoDomainGet != null)
             domain = _monoDomainGet();
 
         return domain;
     }
 
-    private static nint MonoGetRuntimeHandle()
+    private static IntPtr MonoGetRuntimeHandle()
     {
         return EnsureMonoRuntimeHandle();
     }
 
-    private static nint EnsureMonoRuntimeHandle()
+    private static IntPtr EnsureMonoRuntimeHandle()
     {
-        if (_monoRuntimeHandle != nint.Zero)
+        if (_monoRuntimeHandle != IntPtr.Zero)
             return _monoRuntimeHandle;
 
         foreach (var candidate in EnumerateMonoLibraryCandidates())
         {
             var handle = LoadMonoLibrary(candidate);
-            if (handle != nint.Zero)
+            if (handle != IntPtr.Zero)
             {
                 _monoRuntimeHandle = handle;
                 break;
             }
         }
 
-        if (_monoRuntimeHandle == nint.Zero)
+        if (_monoRuntimeHandle == IntPtr.Zero)
             Log.LogWarning("Failed to locate the Mono runtime library. Mono-based titles may not function correctly.");
 
         return _monoRuntimeHandle;
     }
 
-    private static void EnsureMonoDelegates(nint handle)
+    private static void EnsureMonoDelegates(IntPtr handle)
     {
         if (_monoGetRootDomain == null)
         {
             var export = GetExportSafe(handle, "mono_get_root_domain");
-            if (export != nint.Zero)
+            if (export != IntPtr.Zero)
                 _monoGetRootDomain = (MonoGetRootDomainDelegate)Marshal.GetDelegateForFunctionPointer(export, typeof(MonoGetRootDomainDelegate));
         }
 
         if (_monoDomainGet == null)
         {
             var export = GetExportSafe(handle, "mono_domain_get");
-            if (export != nint.Zero)
+            if (export != IntPtr.Zero)
                 _monoDomainGet = (MonoDomainGetDelegate)Marshal.GetDelegateForFunctionPointer(export, typeof(MonoDomainGetDelegate));
         }
     }
@@ -377,7 +412,7 @@ internal static class BootstrapShim
         var dataDirectory = Path.Combine(gameRoot, $"{Paths.ProcessName}_Data");
         var candidates = new[]
         {
-            Path.Combine(dataDirectory, "MonoBleedingEdge", "EmbedRuntime"),
+            Path.Combine(Path.Combine(dataDirectory, "MonoBleedingEdge"), "EmbedRuntime"),
             Path.Combine(dataDirectory, "MonoBleedingEdge"),
             Path.Combine(dataDirectory, "Mono")
         };
@@ -389,30 +424,48 @@ internal static class BootstrapShim
         }
     }
 
-    private static nint LoadMonoLibrary(string path)
+    private static IntPtr LoadMonoLibrary(string path)
     {
         try
         {
-            return MelonLoader.NativeLibrary.AgnosticLoadLibrary(path);
+            // Use reflection to call MelonLoader.NativeLibrary.AgnosticLoadLibrary
+            var melonAssembly = typeof(MelonLaunchOptions).Assembly;
+            var nativeLibraryType = melonAssembly.GetType("MelonLoader.NativeLibrary");
+            var loadMethod = nativeLibraryType?.GetMethod("AgnosticLoadLibrary", BindingFlags.Static | BindingFlags.Public);
+            if (loadMethod != null)
+            {
+                var result = loadMethod.Invoke(null, new object[] { path });
+                return result != null ? (IntPtr)result : IntPtr.Zero;
+            }
+            return IntPtr.Zero;
         }
         catch
         {
-            return nint.Zero;
+            return IntPtr.Zero;
         }
     }
 
-    private static nint GetExportSafe(nint handle, string name)
+    private static IntPtr GetExportSafe(IntPtr handle, string name)
     {
-        if (handle == nint.Zero)
-            return nint.Zero;
+        if (handle == IntPtr.Zero)
+            return IntPtr.Zero;
 
         try
         {
-            return MelonLoader.NativeLibrary.GetExport(handle, name);
+            // Use reflection to call MelonLoader.NativeLibrary.GetExport
+            var melonAssembly = typeof(MelonLaunchOptions).Assembly;
+            var nativeLibraryType = melonAssembly.GetType("MelonLoader.NativeLibrary");
+            var getExportMethod = nativeLibraryType?.GetMethod("GetExport", BindingFlags.Static | BindingFlags.Public);
+            if (getExportMethod != null)
+            {
+                var result = getExportMethod.Invoke(null, new object[] { handle, name });
+                return result != null ? (IntPtr)result : IntPtr.Zero;
+            }
+            return IntPtr.Zero;
         }
         catch
         {
-            return nint.Zero;
+            return IntPtr.Zero;
         }
     }
 
@@ -423,7 +476,13 @@ internal static class BootstrapShim
     {
         var preparedConfig = PrepareLoaderConfig();
         config = preparedConfig;
-        LoaderConfig.Current = preparedConfig;
+
+        // Set LoaderConfig.Current via reflection (internal setter)
+        var currentProperty = typeof(LoaderConfig).GetProperty("Current", BindingFlags.Public | BindingFlags.Static);
+        if (currentProperty != null && currentProperty.CanWrite)
+        {
+            currentProperty.SetValue(null, preparedConfig, null);
+        }
     }
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -435,7 +494,7 @@ internal static class BootstrapShim
     private static LoaderConfig PrepareLoaderConfig()
     {
         var baseDir = GetBaseDirectory();
-        var configPath = Path.Combine(baseDir, "UserData", "Loader.cfg");
+        var configPath = Path.Combine(Path.Combine(baseDir, "UserData"), "Loader.cfg");
         LoaderConfig config = new();
 
         if (File.Exists(configPath))
@@ -451,7 +510,7 @@ internal static class BootstrapShim
             }
         }
 
-        config.Loader.BaseDirectory = baseDir;
+        SetInternalProperty(config.Loader, "BaseDirectory", baseDir);
         ApplyLaunchOverrides(config);
 
         try
@@ -472,7 +531,8 @@ internal static class BootstrapShim
     {
         try
         {
-            var searchManagerType = typeof(MelonLoader.Core).Assembly.GetType("MelonLoader.MonoInternals.ResolveInternals.SearchDirectoryManager");
+            var melonAssembly = typeof(MelonLaunchOptions).Assembly;
+            var searchManagerType = melonAssembly.GetType("MelonLoader.MonoInternals.ResolveInternals.SearchDirectoryManager");
             var scanMethod = searchManagerType?.GetMethod("Scan", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
             if (scanMethod == null)
                 return null;
@@ -490,15 +550,15 @@ internal static class BootstrapShim
     {
         var searchPaths = new List<string>
         {
-            MelonLoader.Utils.MelonEnvironment.MelonLoaderDirectory,
-            Path.Combine(MelonLoader.Utils.MelonEnvironment.MelonLoaderDirectory, "net35"),
-            Path.Combine(MelonLoader.Utils.MelonEnvironment.MelonLoaderDirectory, "net6"),
-            MelonLoader.Utils.MelonEnvironment.PluginsDirectory,
-            MelonLoader.Utils.MelonEnvironment.ModsDirectory,
-            MelonLoader.Utils.MelonEnvironment.UserLibsDirectory
+            MelonEnvironment.MelonLoaderDirectory,
+            Path.Combine(MelonEnvironment.MelonLoaderDirectory, "net35"),
+            Path.Combine(MelonEnvironment.MelonLoaderDirectory, "net6"),
+            MelonEnvironment.PluginsDirectory,
+            MelonEnvironment.ModsDirectory,
+            MelonEnvironment.UserLibsDirectory
         };
 
-        foreach (var directory in searchPaths.Where(p => !string.IsNullOrWhiteSpace(p)).Distinct())
+        foreach (var directory in searchPaths.Where(p => !IsNullOrWhiteSpace(p)).Distinct())
         {
             if (!Directory.Exists(directory))
                 continue;
@@ -523,32 +583,31 @@ internal static class BootstrapShim
     private static void ApplyLaunchOverrides(LoaderConfig config)
     {
         if (ArgParser.IsDefined("no-mods"))
-            config.Loader.Disable = true;
+            SetInternalProperty(config.Loader, "Disable", true);
 
         if (ArgParser.IsDefined("melonloader.debug"))
-            config.Loader.DebugMode = true;
+            SetInternalProperty(config.Loader, "DebugMode", true);
 
         if (ArgParser.IsDefined("melonloader.captureplayerlogs"))
-            config.Loader.CapturePlayerLogs = true;
+            SetInternalProperty(config.Loader, "CapturePlayerLogs", true);
 
         var harmonyLevel = ArgParser.GetValue("melonloader.harmonyloglevel");
-        if (!string.IsNullOrWhiteSpace(harmonyLevel) &&
-            Enum.TryParse(harmonyLevel, true, out LoaderConfig.CoreConfig.HarmonyLogVerbosity verbosity))
+        if (!IsNullOrWhiteSpace(harmonyLevel) &&
+            TryParseEnum(harmonyLevel, true, out LoaderConfig.CoreConfig.HarmonyLogVerbosity verbosity))
         {
-            config.Loader.HarmonyLogLevel = verbosity;
+            SetInternalProperty(config.Loader, "HarmonyLogLevel", verbosity);
         }
 
         if (ArgParser.IsDefined("quitfix"))
-            config.Loader.ForceQuit = true;
+            SetInternalProperty(config.Loader, "ForceQuit", true);
 
         if (ArgParser.IsDefined("melonloader.disablestartscreen"))
-            config.Loader.DisableStartScreen = true;
+            SetInternalProperty(config.Loader, "DisableStartScreen", true);
 
         if (ArgParser.IsDefined("melonloader.launchdebugger"))
-            config.Loader.LaunchDebugger = true;
+            SetInternalProperty(config.Loader, "LaunchDebugger", true);
 
         var consoleMode = ArgParser.GetValue("melonloader.consolemode");
-        config.Loader.Theme = LoaderConfig.CoreConfig.LoaderTheme.Normal;
         if (int.TryParse(consoleMode, out var modeValue))
         {
             var min = (int)LoaderConfig.CoreConfig.LoaderTheme.Normal;
@@ -558,65 +617,65 @@ internal static class BootstrapShim
             if (modeValue > max)
                 modeValue = max;
 
-            config.Loader.Theme = (LoaderConfig.CoreConfig.LoaderTheme)modeValue;
+            SetInternalProperty(config.Loader, "Theme", (LoaderConfig.CoreConfig.LoaderTheme)modeValue);
         }
 
         if (ArgParser.IsDefined("melonloader.hideconsole"))
-            config.Console.Hide = true;
+            SetInternalProperty(config.Console, "Hide", true);
 
         if (ArgParser.IsDefined("melonloader.consoleontop"))
-            config.Console.AlwaysOnTop = true;
+            SetInternalProperty(config.Console, "AlwaysOnTop", true);
 
         if (ArgParser.IsDefined("melonloader.consoledst"))
-            config.Console.DontSetTitle = true;
+            SetInternalProperty(config.Console, "DontSetTitle", true);
 
         if (ArgParser.IsDefined("melonloader.hidewarnings"))
-            config.Console.HideWarnings = true;
+            SetInternalProperty(config.Console, "HideWarnings", true);
 
         var maxLogsValue = ArgParser.GetValue("melonloader.maxlogs");
         if (uint.TryParse(maxLogsValue, out var maxLogs))
-            config.Logs.MaxLogs = maxLogs;
+            SetInternalProperty(config.Logs, "MaxLogs", maxLogs);
 
         if (ArgParser.IsDefined("melonloader.debugsuspend"))
-            config.MonoDebugServer.DebugSuspend = true;
+            SetInternalProperty(config.MonoDebugServer, "DebugSuspend", true);
 
         var debugIp = ArgParser.GetValue("melonloader.debugipaddress");
-        if (!string.IsNullOrWhiteSpace(debugIp))
-            config.MonoDebugServer.DebugIpAddress = debugIp;
+        if (!IsNullOrWhiteSpace(debugIp))
+            SetInternalProperty(config.MonoDebugServer, "DebugIpAddress", debugIp);
 
         var debugPort = ArgParser.GetValue("melonloader.debugport");
         if (uint.TryParse(debugPort, out var portValue))
-            config.MonoDebugServer.DebugPort = portValue;
+            SetInternalProperty(config.MonoDebugServer, "DebugPort", portValue);
 
         var unityVersionOverride = ArgParser.GetValue("melonloader.unityversion");
-        if (!string.IsNullOrWhiteSpace(unityVersionOverride))
-            config.UnityEngine.VersionOverride = unityVersionOverride;
+        if (!IsNullOrWhiteSpace(unityVersionOverride))
+            SetInternalProperty(config.UnityEngine, "VersionOverride", unityVersionOverride);
 
         if (ArgParser.IsDefined("melonloader.disableunityclc"))
-            config.UnityEngine.DisableConsoleLogCleaner = true;
+            SetInternalProperty(config.UnityEngine, "DisableConsoleLogCleaner", true);
 
         var monoSearchOverride = ArgParser.GetValue("melonloader.monosearchpathoverride");
-        if (!string.IsNullOrWhiteSpace(monoSearchOverride))
-            config.UnityEngine.MonoSearchPathOverride = monoSearchOverride;
+        if (!IsNullOrWhiteSpace(monoSearchOverride))
+            SetInternalProperty(config.UnityEngine, "MonoSearchPathOverride", monoSearchOverride);
 
         if (ArgParser.IsDefined("melonloader.agfoffline"))
-            config.UnityEngine.ForceOfflineGeneration = true;
+            SetInternalProperty(config.UnityEngine, "ForceOfflineGeneration", true);
 
         var agfRegex = ArgParser.GetValue("melonloader.agfregex");
-        if (!string.IsNullOrWhiteSpace(agfRegex))
-            config.UnityEngine.ForceGeneratorRegex = agfRegex;
+        if (!IsNullOrWhiteSpace(agfRegex))
+            SetInternalProperty(config.UnityEngine, "ForceGeneratorRegex", agfRegex);
 
         var agfDumper = ArgParser.GetValue("melonloader.agfvdumper");
-        if (!string.IsNullOrWhiteSpace(agfDumper))
-            config.UnityEngine.ForceIl2CppDumperVersion = agfDumper;
+        if (!IsNullOrWhiteSpace(agfDumper))
+            SetInternalProperty(config.UnityEngine, "ForceIl2CppDumperVersion", agfDumper);
 
         if (ArgParser.IsDefined("melonloader.agfregenerate"))
-            config.UnityEngine.ForceRegeneration = true;
+            SetInternalProperty(config.UnityEngine, "ForceRegeneration", true);
 
         if (ArgParser.IsDefined("cpp2il.callanalyzer"))
-            config.UnityEngine.EnableCpp2ILCallAnalyzer = true;
+            SetInternalProperty(config.UnityEngine, "EnableCpp2ILCallAnalyzer", true);
 
         if (ArgParser.IsDefined("cpp2il.nativemethoddetector"))
-            config.UnityEngine.EnableCpp2ILNativeMethodDetector = true;
+            SetInternalProperty(config.UnityEngine, "EnableCpp2ILNativeMethodDetector", true);
     }
 }
