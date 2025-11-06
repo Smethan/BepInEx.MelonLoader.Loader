@@ -20,7 +20,7 @@ class Build : NukeBuild
 {
 	public static int Main () => Execute<Build>(x => x.Compile);
 
-    public const string MLVersionName = "v0.5.7";
+    public const string MLVersionName = "v0.7.1";
     private const string ProjectName = "BepInEx.MelonLoader.Loader";
 
     private AbsolutePath OutputDir => RootDirectory / "Output";
@@ -37,8 +37,8 @@ class Build : NukeBuild
 		    await using var fileStream = new FileStream(zipPath, FileMode.Create);
 
 		    await using var downloadStream =
-			    await httpClient.GetStreamAsync(
-				    "https://github.com/LavaGang/MelonLoader/releases/download/v0.5.7/MelonLoader.x64.zip");
+                    await httpClient.GetStreamAsync(
+                        "https://github.com/LavaGang/MelonLoader/releases/download/v0.7.1/MelonLoader.x64.zip");
 
 		    await downloadStream.CopyToAsync(fileStream);
 			fileStream.Close();
@@ -85,7 +85,7 @@ class Build : NukeBuild
 		    stagingBepInExPath,
 		    DirectoryExistsPolicy.Merge);
 
-	    stagingBepInExPath.GlobFiles("*.pdb", "Mono*.dll", "*Harmony.dll").DeleteFiles();
+        stagingBepInExPath.GlobFiles("*.pdb").DeleteFiles();
 
 	    var stagingMLDependencies = stagingMLPath / "MelonLoader" / "Dependencies";
 
@@ -108,7 +108,7 @@ class Build : NukeBuild
 		}
 
 		(stagingMLDependencies / "MonoBleedingEdge.x64").DeleteDirectory();
-		(stagingMLDependencies / "Bootstrap.dll").DeleteFile();
+        (stagingMLDependencies / "Bootstrap.dll").DeleteFile();
 
 		stagingDirectory.ZipTo(OutputDir / $"MLLoader-{projectSubname}-{configuration}-{MLVersionName}.zip");
 		stagingDirectory.DeleteDirectory();

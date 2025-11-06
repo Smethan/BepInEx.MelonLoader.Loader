@@ -1,25 +1,15 @@
-﻿using System;
-using BepInEx.IL2CPP;
-using MLCore = MelonLoader.Core;
+﻿using BepInEx.IL2CPP;
+using BepInEx.MelonLoader.Loader.Shared;
 
+namespace BepInEx.MelonLoader.Loader.IL2CPP;
 
-namespace BepInEx.MelonLoader.Loader.IL2CPP
+[BepInPlugin(PluginInfo.PLUGIN_GUID, PluginInfo.PLUGIN_NAME, PluginInfo.PLUGIN_VERSION)]
+public class Plugin : BasePlugin
 {
-    [BepInPlugin(PluginInfo.PLUGIN_GUID, PluginInfo.PLUGIN_NAME, PluginInfo.PLUGIN_VERSION)]
-    public class Plugin : BasePlugin
+    public override void Load()
     {
-        public override void Load()
-        {
-            AppDomain.CurrentDomain.AssemblyResolve += (sender, args) =>
-            {
-                if (args.Name.Contains("MelonLoader"))
-                    return typeof(MLCore).Assembly;
-                return null;
-            };
+        BootstrapShim.EnsureInitialized();
 
-            MLCore.Initialize(Config, false);
-            MLCore.PreStart();
-            MLCore.Start();
-        }
+        BootstrapShim.RunMelonLoader(message => Log.LogError(message));
     }
 }

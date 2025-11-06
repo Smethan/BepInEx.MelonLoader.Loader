@@ -16,9 +16,13 @@
     <ItemGroup>
         <PackageReference Include="BepInEx.IL2CPP" Version="6.0.0-be.572" IncludeAssets="compile" />
         <PackageReference Include="BepInEx.PluginInfoProps" Version="1.1.0" />
+        <PackageReference Include="LavaGang.MelonLoader" Version="0.7.1" IncludeAssets="compile" />
+        <PackageReference Include="MonoMod.RuntimeDetour" Version="22.7.31.1" IncludeAssets="compile" />
+        <PackageReference Include="Samboy063.Tomlet" Version="6.0.0" IncludeAssets="compile" />
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\MelonLoader\MelonLoader.csproj" />
+        <Compile Include="..\Shared\BootstrapShim.cs" Link="Shared/BootstrapShim.cs" />
+        <Compile Include="..\Shared\ArgParser.cs" Link="Shared/ArgParser.cs" />
     </ItemGroup>
 </Project>

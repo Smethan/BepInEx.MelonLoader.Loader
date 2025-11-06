@@ -1,5 +1,4 @@
-﻿using System;
-using MLCore = MelonLoader.Core;
+﻿using BepInEx.MelonLoader.Loader.Shared;
 
 namespace BepInEx.MelonLoader.Loader.UnityMono;
 
@@ -8,15 +7,9 @@ public class Plugin : BaseUnityPlugin
 {
     private void Awake()
     {
-        AppDomain.CurrentDomain.AssemblyResolve += (sender, args) =>
-        {
-            if (args.Name.Contains("MelonLoader"))
-                return typeof(MLCore).Assembly;
-            return null;
-        };
+        BootstrapShim.EnsureInitialized();
 
-        MLCore.Initialize(Config, false);
-        MLCore.PreStart();
-        MLCore.Start();
+        if (!BootstrapShim.RunMelonLoader(Logger.LogError))
+            return;
     }
 }
