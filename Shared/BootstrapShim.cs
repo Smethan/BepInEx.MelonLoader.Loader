@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -164,29 +165,245 @@ internal static class BootstrapShim
     private static string GetBaseDirectory()
     {
         var configuredBaseDir = ArgParser.GetValue("melonloader.basedir");
-        string baseRoot;
 
         if (!IsNullOrWhiteSpace(configuredBaseDir) && Directory.Exists(configuredBaseDir))
         {
-            baseRoot = Path.GetFullPath(configuredBaseDir);
+            return Path.GetFullPath(configuredBaseDir);
+        }
+
+        // Get the location of this plugin DLL
+        var pluginLocation = typeof(BootstrapShim).Assembly.Location;
+        var pluginDir = Path.GetDirectoryName(pluginLocation);
+
+        return Path.Combine(pluginDir, "MLLoader");
+    }
+
+    private static string FindR2ModManProfile()
+    {
+        try
+        {
+            string r2modmanBase;
+
+            // Determine r2modman config path based on OS
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+            {
+                r2modmanBase = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "r2modmanPlus-local");
+            }
+            else
+            {
+                // Linux/Mac
+                var configPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                if (string.IsNullOrEmpty(configPath))
+                    configPath = Path.Combine(Environment.GetEnvironmentVariable("HOME"), ".config");
+                r2modmanBase = Path.Combine(configPath, "r2modmanPlus-local");
+            }
+
+            if (!Directory.Exists(r2modmanBase))
+            {
+                Log.LogDebug($"r2modman installation not found at {r2modmanBase}");
+                return null;
+            }
+
+            // Detect game name from current process
+            string gameName = Path.GetFileNameWithoutExtension(
+                Process.GetCurrentProcess().MainModule.FileName);
+
+            if (string.IsNullOrEmpty(gameName))
+            {
+                Log.LogDebug("Could not determine game executable name");
+                return null;
+            }
+
+            // Check for game-specific profile directory
+            string gameProfileDir = Path.Combine(r2modmanBase, gameName, "profiles");
+            if (!Directory.Exists(gameProfileDir))
+            {
+                Log.LogDebug($"No r2modman profiles found for game '{gameName}' at {gameProfileDir}");
+                return null;
+            }
+
+            // Find most recently modified profile (likely the active one)
+            var profiles = Directory.GetDirectories(gameProfileDir);
+            if (profiles.Length == 0)
+            {
+                Log.LogDebug($"No profiles found in {gameProfileDir}");
+                return null;
+            }
+
+            var activeProfile = profiles
+                .OrderByDescending(Directory.GetLastWriteTime)
+                .First();
+
+            Log.LogInfo($"Detected r2modman profile: {activeProfile}");
+            return activeProfile;
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning($"Failed to detect r2modman profile: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static bool IsSymbolicLink(string path)
+    {
+        try
+        {
+            if (!Directory.Exists(path))
+                return false;
+
+            var dirInfo = new DirectoryInfo(path);
+            return dirInfo.Attributes.HasFlag(FileAttributes.ReparsePoint);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool CreateSymbolicLink(string lpSymlinkFileName, string lpTargetFileName, int dwFlags);
+
+    private static bool TryCreateSymlink(string linkPath, string targetPath)
+    {
+        try
+        {
+            // Remove existing if it's already a symlink
+            if (Directory.Exists(linkPath))
+            {
+                if (IsSymbolicLink(linkPath))
+                {
+                    Log.LogDebug($"Removing existing symlink at {linkPath}");
+                    Directory.Delete(linkPath);
+                }
+                else
+                {
+                    Log.LogDebug($"Directory already exists and is not a symlink: {linkPath}");
+                    return false; // Don't overwrite real directories
+                }
+            }
+
+            if (!Directory.Exists(targetPath))
+            {
+                Log.LogDebug($"Target directory does not exist: {targetPath}");
+                return false;
+            }
+
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+            {
+                // Windows: Try to create directory symlink
+                // dwFlags = 1 for directory symlink
+                bool success = CreateSymbolicLink(linkPath, targetPath, 1);
+                if (!success)
+                {
+                    Log.LogWarning($"Failed to create Windows symlink from {linkPath} to {targetPath}");
+                    return false;
+                }
+            }
+            else
+            {
+                // Linux/Mac: Use ln -s command
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "ln",
+                    Arguments = $"-s \"{targetPath}\" \"{linkPath}\"",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+
+                using (var process = Process.Start(psi))
+                {
+                    process.WaitForExit();
+                    if (process.ExitCode != 0)
+                    {
+                        var error = process.StandardError.ReadToEnd();
+                        Log.LogWarning($"Failed to create symlink: {error}");
+                        return false;
+                    }
+                }
+            }
+
+            Log.LogInfo($"Created symlink: {linkPath} -> {targetPath}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning($"Failed to create symlink from {linkPath} to {targetPath}: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static void SetupR2ModManIntegration(string baseDir, string profilePath)
+    {
+        if (string.IsNullOrEmpty(profilePath))
+            return;
+
+        Log.LogInfo("Setting up r2modman integration...");
+
+        // Try to create symlinks for Mods, Plugins, and UserData directories
+        var symlinkPairs = new[]
+        {
+            (Path.Combine(baseDir, "Mods"), Path.Combine(profilePath, "Mods")),
+            (Path.Combine(baseDir, "Plugins"), Path.Combine(profilePath, "Plugins")),
+            (Path.Combine(baseDir, "UserData"), Path.Combine(profilePath, "UserData"))
+        };
+
+        bool anySymlinkCreated = false;
+        foreach (var (linkPath, targetPath) in symlinkPairs)
+        {
+            if (TryCreateSymlink(linkPath, targetPath))
+            {
+                anySymlinkCreated = true;
+            }
+        }
+
+        if (anySymlinkCreated)
+        {
+            Log.LogInfo("r2modman integration setup complete via symlinks");
         }
         else
         {
-            baseRoot = Paths.GameRootPath ?? AppDomain.CurrentDomain.BaseDirectory;
+            Log.LogWarning("Could not create symlinks for r2modman integration");
+            Log.LogInfo("MelonLoader mods from r2modman may not be discovered automatically");
+            Log.LogInfo("Consider using --melonloader.basedir launch argument to point to r2modman profile");
         }
-
-        return Path.Combine(baseRoot, "MLLoader");
     }
 
     private static void EnsureDirectoryLayout()
     {
         var baseDir = GetBaseDirectory();
-
         Directory.CreateDirectory(baseDir);
-        Directory.CreateDirectory(Path.Combine(baseDir, "Mods"));
-        Directory.CreateDirectory(Path.Combine(baseDir, "Plugins"));
-        Directory.CreateDirectory(Path.Combine(baseDir, "UserData"));
-        Directory.CreateDirectory(Path.Combine(baseDir, "UserLibs"));
+
+        // Try to detect and setup r2modman integration
+        var r2modmanProfile = FindR2ModManProfile();
+        if (r2modmanProfile != null)
+        {
+            SetupR2ModManIntegration(baseDir, r2modmanProfile);
+        }
+
+        // Create directories that weren't symlinked (or all if no r2modman)
+        var dirsToCreate = new[]
+        {
+            "Mods",
+            "Plugins",
+            "UserData",
+            "UserLibs"
+        };
+
+        foreach (var dir in dirsToCreate)
+        {
+            var fullPath = Path.Combine(baseDir, dir);
+            // Only create if it doesn't already exist (symlink or otherwise)
+            if (!Directory.Exists(fullPath))
+            {
+                Directory.CreateDirectory(fullPath);
+            }
+        }
+
+        // Always create these MelonLoader-specific directories
         Directory.CreateDirectory(Path.Combine(baseDir, "MelonLoader"));
         Directory.CreateDirectory(Path.Combine(Path.Combine(baseDir, "MelonLoader"), "Dependencies"));
         Directory.CreateDirectory(Path.Combine(Path.Combine(baseDir, "MelonLoader"), "Il2CppAssemblies"));

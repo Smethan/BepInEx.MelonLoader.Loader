@@ -233,8 +233,8 @@ Variants:
 
     parser.add_argument(
         '--variant',
-        required=True,
         choices=['IL2CPP-BepInEx6', 'UnityMono-BepInEx5', 'UnityMono-BepInEx6'],
+        default=['IL2CPP-BepInEx6'],
         help='Build variant to package'
     )
 
@@ -271,7 +271,7 @@ Variants:
     parser.add_argument(
         '--deps',
         nargs='*',
-        default=[],
+        default=["BepInEx-BepInExPack_IL2CPP-6.0.733"],
         help='Dependencies in format "Author-Name-Version"'
     )
 

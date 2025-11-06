@@ -20,7 +20,7 @@ class Build : NukeBuild
 {
 	public static int Main () => Execute<Build>(x => x.Compile);
 
-    public const string MLVersionName = "v0.7.1";
+    public const string MLVersionName = "2.1.0";
     private const string ProjectName = "BepInEx.MelonLoader.Loader";
 
     private AbsolutePath OutputDir => RootDirectory / "Output";
@@ -63,8 +63,8 @@ class Build : NukeBuild
     private void HandleBuild(string projectSubname, string framework, string configuration, bool il2cpp)
     {
 	    var stagingDirectory = OutputDir / "staging";
-	    var stagingBepInExPath = stagingDirectory / "BepInEx" / "plugins"  / ProjectName;
-	    var stagingMLPath = stagingDirectory / "MLLoader";
+	    var stagingBepInExPath = stagingDirectory / "BepInEx" / "plugins";
+	    var stagingMLPath = stagingBepInExPath / "MLLoader";
 
 	    stagingBepInExPath.CreateOrCleanDirectory();
 	    stagingMLPath.CreateOrCleanDirectory();
