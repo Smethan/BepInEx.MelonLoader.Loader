@@ -156,7 +156,7 @@ class ThunderstorePackager:
             print(f"  Create one at: {self.temp_dir / 'README.md'}")
 
         # Extract and copy build files
-        build_zip = self.output_dir / f"MLLoader-{self.variant}-v{self.version}.zip"
+        build_zip = self.output_dir / f"MLLoader-{self.variant}-{self.version}.zip"
         if not build_zip.exists():
             raise FileNotFoundError(f"Build file not found: {build_zip}")
 
@@ -234,7 +234,7 @@ Variants:
     parser.add_argument(
         '--variant',
         choices=['IL2CPP-BepInEx6', 'UnityMono-BepInEx5', 'UnityMono-BepInEx6'],
-        default=['IL2CPP-BepInEx6'],
+        default='IL2CPP-BepInEx6',
         help='Build variant to package'
     )
 

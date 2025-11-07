@@ -217,7 +217,8 @@ internal static class BootstrapShim
             }
 
             // Check for game-specific profile directory
-            string gameProfileDir = Path.Combine(r2modmanBase, gameName, "profiles");
+            var gameProfileBase = Path.Combine(r2modmanBase, gameName);
+            string gameProfileDir = Path.Combine(gameProfileBase, "profiles");
             if (!Directory.Exists(gameProfileDir))
             {
                 Log.LogDebug($"No r2modman profiles found for game '{gameName}' at {gameProfileDir}");
@@ -254,7 +255,7 @@ internal static class BootstrapShim
                 return false;
 
             var dirInfo = new DirectoryInfo(path);
-            return dirInfo.Attributes.HasFlag(FileAttributes.ReparsePoint);
+            return (dirInfo.Attributes & FileAttributes.ReparsePoint) == FileAttributes.ReparsePoint;
         }
         catch
         {
@@ -346,14 +347,16 @@ internal static class BootstrapShim
         // Try to create symlinks for Mods, Plugins, and UserData directories
         var symlinkPairs = new[]
         {
-            (Path.Combine(baseDir, "Mods"), Path.Combine(profilePath, "Mods")),
-            (Path.Combine(baseDir, "Plugins"), Path.Combine(profilePath, "Plugins")),
-            (Path.Combine(baseDir, "UserData"), Path.Combine(profilePath, "UserData"))
+            new KeyValuePair<string, string>(Path.Combine(baseDir, "Mods"), Path.Combine(profilePath, "Mods")),
+            new KeyValuePair<string, string>(Path.Combine(baseDir, "Plugins"), Path.Combine(profilePath, "Plugins")),
+            new KeyValuePair<string, string>(Path.Combine(baseDir, "UserData"), Path.Combine(profilePath, "UserData"))
         };
 
         bool anySymlinkCreated = false;
-        foreach (var (linkPath, targetPath) in symlinkPairs)
+        foreach (var pair in symlinkPairs)
         {
+            var linkPath = pair.Key;
+            var targetPath = pair.Value;
             if (TryCreateSymlink(linkPath, targetPath))
             {
                 anySymlinkCreated = true;
