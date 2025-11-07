@@ -11,13 +11,26 @@ Loader for BepInEx to be able to use MelonLoader plugins.
 #### Notes
 
 - Launch options for MelonLoader are located in `BepInEx/config`. Additional options configuring the internal components of MelonLoader are also located here. The configuration file will be generated on the first launch automatically.
-- The Mods and Plugins folders have been moved to `MLLoader/Mods` and `MLLoader/Plugins` folders respectively. Other folders and files have been moved to the `MLLoader` folder, but some plugins/mods won't respect this.
+- The Mods and Plugins folders are located in `MLLoader/Mods` and `MLLoader/Plugins` respectively. Other folders and files have been moved to the `MLLoader` folder, but some plugins/mods won't respect this.
+- **r2modman Support**: When installed via r2modman/Thunderstore, the plugin automatically detects your r2modman profile and creates symlinks to integrate MelonLoader mods installed through r2modman. This allows seamless management of both BepInEx and MelonLoader mods.
 
 ### Installation instructions
+
+#### Option 1: r2modman/Thunderstore (Recommended)
+
+1. Install BepInEx through r2modman/Thunderstore (BepInEx Pack 5 or 6, depending on your game)
+2. Search for "MelonLoader Loader" in r2modman and install the appropriate variant for your game
+3. Launch the game through r2modman
+
+The plugin will automatically set up the MLLoader directory structure and integrate with your r2modman profile for automatic mod discovery.
+
+#### Option 2: Manual Installation
 
 1. Install BepInEx 5 or 6 according to the game you want to use. Note that IL2CPP support is only available for BepInEx 6.
 2. Download the [latest release](https://github.com/BepInEx/BepInEx.MelonLoader.Loader/releases) (pick the correct version) and extract it into your game folder.
 3. Run the game
+
+**Note**: Manual installation places files in `BepInEx/plugins/BepInEx.MelonLoader.Loader/` and creates `BepInEx/plugins/BepInEx.MelonLoader.Loader/MLLoader/` for MelonLoader files.
 
 --------
 

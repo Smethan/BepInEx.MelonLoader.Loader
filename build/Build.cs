@@ -64,9 +64,10 @@ class Build : NukeBuild
     {
 	    var stagingDirectory = OutputDir / "staging";
 	    var stagingBepInExPath = stagingDirectory / "BepInEx" / "plugins";
-	    var stagingMLPath = stagingBepInExPath / "MLLoader";
+	    var stagingPluginPath = stagingBepInExPath / "BepInEx.MelonLoader.Loader";
+	    var stagingMLPath = stagingDirectory / "MLLoader";
 
-	    stagingBepInExPath.CreateOrCleanDirectory();
+	    stagingPluginPath.CreateOrCleanDirectory();
 	    stagingMLPath.CreateOrCleanDirectory();
 
 	    (stagingMLPath / "MelonLoader").CreateDirectory();
@@ -80,12 +81,30 @@ class Build : NukeBuild
 			    .SetFramework(framework)
 			    .SetConfiguration(configuration));
 
+	    // Copy plugin DLLs to plugin subfolder
 	    CopyDirectoryRecursively(
 		    RootDirectory / $"{ProjectName}.{projectSubname}" / "Output" / configuration / projectSubname,
-		    stagingBepInExPath,
+		    stagingPluginPath,
 		    DirectoryExistsPolicy.Merge);
 
-        stagingBepInExPath.GlobFiles("*.pdb").DeleteFiles();
+	    // Determine MelonLoader directory based on framework (net6 for IL2CPP, net35 for Mono)
+	    var melonLoaderDllPath = MelonloaderFilesPath / "MelonLoader" / (il2cpp ? "net6" : "net35");
+
+	    // Copy MelonLoader core DLLs to plugin folder
+	    CopyFileToDirectory(melonLoaderDllPath / "MelonLoader.dll", stagingPluginPath);
+	    CopyFileToDirectory(melonLoaderDllPath / "0Harmony.dll", stagingPluginPath);
+
+	    // Copy support DLLs if they exist
+	    var supportDlls = new[] {
+		    "AssetRipper.Primitives.dll", "AssetsTools.NET.dll", "Tomlet.dll",
+		    "WebSocketDotNet.dll", "bHapticsLib.dll"
+	    };
+	    foreach (var dll in supportDlls)
+	    {
+		    var dllPath = melonLoaderDllPath / dll;
+		    if (File.Exists(dllPath))
+			    CopyFileToDirectory(dllPath, stagingPluginPath);
+	    }
 
 	    var stagingMLDependencies = stagingMLPath / "MelonLoader" / "Dependencies";
 
@@ -93,6 +112,7 @@ class Build : NukeBuild
 			stagingMLDependencies,
 			DirectoryExistsPolicy.Merge);
 
+		// Remove variant-specific files
 		if (!il2cpp)
 		{
 			(stagingMLDependencies / "Il2CppAssemblyGenerator").DeleteDirectory();
@@ -109,6 +129,11 @@ class Build : NukeBuild
 
 		(stagingMLDependencies / "MonoBleedingEdge.x64").DeleteDirectory();
         (stagingMLDependencies / "Bootstrap.dll").DeleteFile();
+
+		// Remove all debug symbols (.pdb, .mdb files) from entire staging directory
+		stagingDirectory.GlobFiles("**/*.pdb").DeleteFiles();
+		stagingDirectory.GlobFiles("**/*.mdb").DeleteFiles();
+		stagingDirectory.GlobFiles("**/*.dll.mdb").DeleteFiles();
 
 		stagingDirectory.ZipTo(OutputDir / $"MLLoader-{projectSubname}-{configuration}-{MLVersionName}.zip");
 		stagingDirectory.DeleteDirectory();

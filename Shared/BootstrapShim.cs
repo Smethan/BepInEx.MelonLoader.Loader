@@ -175,7 +175,13 @@ internal static class BootstrapShim
         var pluginLocation = typeof(BootstrapShim).Assembly.Location;
         var pluginDir = Path.GetDirectoryName(pluginLocation);
 
-        return Path.Combine(pluginDir, "MLLoader");
+        // After r2modman install structure:
+        // BepInEx/plugins/Author-ModName/BepInEx.MelonLoader.Loader/Plugin.dll
+        // MLLoader is at: BepInEx/plugins/Author-ModName/MLLoader/
+        // So go up one directory from plugin subfolder to Author-ModName folder
+        var authorModDir = Path.GetDirectoryName(pluginDir);
+
+        return Path.Combine(authorModDir, "MLLoader");
     }
 
     private static string FindR2ModManProfile()

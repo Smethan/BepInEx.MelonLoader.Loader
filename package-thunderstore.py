@@ -16,6 +16,20 @@ from pathlib import Path
 from typing import Optional
 
 
+# Variant-specific BepInEx dependency configuration
+VARIANT_CONFIGS = {
+    'IL2CPP-BepInEx6': {
+        'dependencies': ['BepInEx-BepInExPack_IL2CPP-6.0.733']
+    },
+    'UnityMono-BepInEx5': {
+        'dependencies': ['BepInEx-BepInExPack-5.4.21']
+    },
+    'UnityMono-BepInEx6': {
+        'dependencies': ['BepInEx-BepInExPack-6.0.0-be.572']
+    }
+}
+
+
 class ThunderstorePackager:
     """Handles packaging of BepInEx.MelonLoader.Loader for Thunderstore."""
 
@@ -315,6 +329,12 @@ Variants:
     # Create Thunderstore output directory
     thunderstore_dir.mkdir(parents=True, exist_ok=True)
 
+    # Get variant-specific dependencies if not explicitly provided
+    if args.deps == ["BepInEx-BepInExPack_IL2CPP-6.0.733"]:  # Default value
+        dependencies = VARIANT_CONFIGS.get(args.variant, {}).get('dependencies', [])
+    else:
+        dependencies = args.deps
+
     # Initialize packager
     packager = ThunderstorePackager(
         output_dir=output_dir,
@@ -328,7 +348,7 @@ Variants:
         name=args.name,
         description=args.description,
         website_url=args.website,
-        dependencies=args.deps,
+        dependencies=dependencies,
         namespace=args.namespace
     )
 
