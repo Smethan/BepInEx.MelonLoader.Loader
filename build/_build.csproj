@@ -11,6 +11,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="PluginValidator/**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Nuke.Common" Version="7.0.6" />
   </ItemGroup>
 

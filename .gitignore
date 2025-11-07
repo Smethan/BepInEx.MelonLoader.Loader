@@ -430,3 +430,4 @@ FodyWeavers.xsd
 Output/
 tmp/
 Thunderstore/
+.DS_Store

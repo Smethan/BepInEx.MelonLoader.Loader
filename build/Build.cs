@@ -135,6 +135,9 @@ class Build : NukeBuild
 		stagingDirectory.GlobFiles("**/*.mdb").DeleteFiles();
 		stagingDirectory.GlobFiles("**/*.dll.mdb").DeleteFiles();
 
+		// Remove .NET dependency files (not needed for Unity/Mono runtime)
+		stagingDirectory.GlobFiles("**/*.deps.json").DeleteFiles();
+
 		stagingDirectory.ZipTo(OutputDir / $"MLLoader-{projectSubname}-{configuration}-{MLVersionName}.zip");
 		stagingDirectory.DeleteDirectory();
     }
