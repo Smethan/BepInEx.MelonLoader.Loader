@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Runtime.Loader;
 using BepInEx;
 using BepInEx.Logging;
 using MelonLoader;
@@ -24,6 +25,7 @@ internal static class BootstrapShim
     private static bool _isInitialized;
     private static readonly ManualLogSource Log = Logger.CreateLogSource("MelonLoaderBootstrap");
     private static MelonLoaderConfig _bepInExConfig;
+    private static MelonLoaderAssemblyContext _melonLoaderContext;
 
     private static readonly Dictionary<IntPtr, DetourState> Detours = new();
 
@@ -52,6 +54,24 @@ internal static class BootstrapShim
         var property = target.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
         if (property != null && property.CanWrite)
         {
+            // Handle type conversions
+            var targetType = property.PropertyType;
+            var valueType = value?.GetType();
+
+            if (value != null && valueType != targetType)
+            {
+                // Handle int to uint conversion
+                if (valueType == typeof(int) && targetType == typeof(uint))
+                {
+                    value = (uint)(int)value;
+                }
+                // Handle other numeric conversions as needed
+                else if (targetType.IsPrimitive && valueType.IsPrimitive)
+                {
+                    value = Convert.ChangeType(value, targetType);
+                }
+            }
+
             property.SetValue(target, value, null);
         }
     }

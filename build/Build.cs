@@ -324,6 +324,16 @@ class Build : NukeBuild
             var targetDepsPath = mlDeployPath / "MelonLoader" / "Dependencies";
             CopyDirectoryRecursively(sourceDepsPath, targetDepsPath, DirectoryExistsPolicy.Merge, FileExistsPolicy.Overwrite);
 
+            // Copy patched Il2CppAssemblyGenerator (removes Il2Cpp namespace prefix)
+            var patchedGenerator = RootDirectory / "Dependencies" / "Il2CppAssemblyGenerator.Patched.dll";
+            if (patchedGenerator.FileExists())
+            {
+                Serilog.Log.Information("Copying patched Il2CppAssemblyGenerator...");
+                var generatorTarget = targetDepsPath / "Il2CppAssemblyGenerator" / "Il2CppAssemblyGenerator.dll";
+                CopyFile(patchedGenerator, generatorTarget, FileExistsPolicy.Overwrite);
+                Serilog.Log.Information("  ✓ Patched generator will create assemblies without Il2Cpp prefix");
+            }
+
             Serilog.Log.Information($"✓ Development deployment complete!");
             Serilog.Log.Information($"  Plugin DLLs copied to: {pluginDeployPath}");
             Serilog.Log.Information($"  MelonLoader files copied to: {mlDeployPath}");

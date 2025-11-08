@@ -431,3 +431,4 @@ Output/
 tmp/
 Thunderstore/
 .DS_Store
+MelonLoader-upstream/*

@@ -1,0 +1,11 @@
+<Project>
+    <PropertyGroup>
+        <!-- Il2CppInterop version used by MelonLoader -->
+        <Il2CppInteropVersion>1.5.0-ci.625</Il2CppInteropVersion>
+
+        <!-- Output directory for builds -->
+        <MLOutDir>$(SolutionDir)/Output</MLOutDir>
+
+        <LangVersion>Latest</LangVersion>
+    </PropertyGroup>
+</Project>
