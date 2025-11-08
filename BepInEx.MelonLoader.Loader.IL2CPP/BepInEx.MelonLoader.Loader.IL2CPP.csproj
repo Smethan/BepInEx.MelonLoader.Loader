@@ -24,5 +24,6 @@
     <ItemGroup>
         <Compile Include="..\Shared\BootstrapShim.cs" Link="Shared/BootstrapShim.cs" />
         <Compile Include="..\Shared\ArgParser.cs" Link="Shared/ArgParser.cs" />
+        <Compile Include="..\Shared\MelonLoaderConfig.cs" Link="Shared/MelonLoaderConfig.cs" />
     </ItemGroup>
 </Project>

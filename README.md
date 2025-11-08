@@ -10,7 +10,7 @@ Loader for BepInEx to be able to use MelonLoader plugins.
 
 #### Notes
 
-- Launch options for MelonLoader are located in `BepInEx/config`. Additional options configuring the internal components of MelonLoader are also located here. The configuration file will be generated on the first launch automatically.
+- Launch options for MelonLoader are located in `BepInEx/config/io.bepis.melonloader.loader.cfg`. The configuration file will be generated on the first launch automatically.
 - The Mods and Plugins folders are located in `MLLoader/Mods` and `MLLoader/Plugins` respectively. Other folders and files have been moved to the `MLLoader` folder, but some plugins/mods won't respect this.
 - **r2modman Support**: When installed via r2modman/Thunderstore, the plugin automatically detects your r2modman profile and creates symlinks to integrate MelonLoader mods installed through r2modman. This allows seamless management of both BepInEx and MelonLoader mods.
 

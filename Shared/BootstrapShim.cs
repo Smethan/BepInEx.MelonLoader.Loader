@@ -23,6 +23,7 @@ internal static class BootstrapShim
     private static readonly object InitLock = new();
     private static bool _isInitialized;
     private static readonly ManualLogSource Log = Logger.CreateLogSource("MelonLoaderBootstrap");
+    private static MelonLoaderConfig _bepInExConfig;
 
     private static readonly Dictionary<IntPtr, DetourState> Detours = new();
 
@@ -30,6 +31,7 @@ internal static class BootstrapShim
     {
         public NativeDetour Detour { get; set; }
         public IntPtr OriginalTarget { get; set; }
+        public Delegate TrampolineDelegate { get; set; }  // Keep delegate alive to prevent GC
     }
 
     private static IntPtr _monoRuntimeHandle;
@@ -104,6 +106,11 @@ internal static class BootstrapShim
         }
     }
 
+    internal static void SetBepInExConfig(MelonLoaderConfig config)
+    {
+        _bepInExConfig = config;
+    }
+
     private static void BindDelegate(object target, string propertyName, string methodName)
     {
         if (target == null)
@@ -176,12 +183,12 @@ internal static class BootstrapShim
         var pluginDir = Path.GetDirectoryName(pluginLocation);
 
         // After r2modman install structure:
-        // BepInEx/plugins/Author-ModName/BepInEx.MelonLoader.Loader/Plugin.dll
-        // MLLoader is at: BepInEx/plugins/Author-ModName/MLLoader/
-        // So go up one directory from plugin subfolder to Author-ModName folder
-        var authorModDir = Path.GetDirectoryName(pluginDir);
+        // BepInEx/plugins/BepInEx.MelonLoader.Loader/Plugin.dll
+        // MLLoader is at: BepInEx/plugins/MLLoader/
+        // So go up one directory from plugin subfolder to BepInEx/plugins folder
+        var pluginsDir = Path.GetDirectoryName(pluginDir);
 
-        return Path.Combine(authorModDir, "MLLoader");
+        return Path.Combine(pluginsDir, "MLLoader");
     }
 
     private static string FindR2ModManProfile()
@@ -418,30 +425,65 @@ internal static class BootstrapShim
         Directory.CreateDirectory(Path.Combine(Path.Combine(baseDir, "MelonLoader"), "Il2CppAssemblies"));
     }
 
+    // Dummy method used as a signature for NativeDetour
+    // This must be a real static method (not a lambda) to avoid DynamicMethod.MethodHandle errors
+    private static void DummyNativeSignature() { }
+
     private static unsafe void NativeHookAttach(IntPtr* target, IntPtr detour)
     {
         if (target == null || *target == IntPtr.Zero || detour == IntPtr.Zero)
             throw new ArgumentException("Invalid native hook arguments.");
 
         var originalPtr = *target;
-        var detourPtr = detour;
 
+        // Get the signature method (must be a real method, not a DynamicMethod/lambda)
+        var signatureMethod = typeof(BootstrapShim).GetMethod(
+            nameof(DummyNativeSignature),
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+
+        // Create NativeDetour with the signature method
         var detourInstance = new MonoMod.RuntimeDetour.NativeDetour(
-            (IntPtr)originalPtr,
-            (IntPtr)detourPtr);
+            signatureMethod,  // Provides the signature for trampoline generation
+            originalPtr,      // Original function address
+            detour);          // Detour function address
 
         detourInstance.Apply();
 
+        // GenerateTrampoline returns a MethodBase, but it might be a DynamicMethod
+        // DynamicMethods don't have MethodHandles, so we need to handle them differently
         var trampolineMethod = detourInstance.GenerateTrampoline();
-        var trampolinePtr = trampolineMethod.MethodHandle.GetFunctionPointer();
 
-        lock (Detours)
+        IntPtr trampolinePtr;
+        if (trampolineMethod is System.Reflection.Emit.DynamicMethod dynMethod)
         {
-            Detours[trampolinePtr] = new DetourState
+            // For DynamicMethod, create a delegate and get its function pointer
+            var trampolineDelegate = dynMethod.CreateDelegate(typeof(Action));
+            trampolinePtr = System.Runtime.InteropServices.Marshal.GetFunctionPointerForDelegate(trampolineDelegate);
+
+            // Keep the delegate alive to prevent GC
+            lock (Detours)
             {
-                Detour = detourInstance,
-                OriginalTarget = originalPtr
-            };
+                Detours[trampolinePtr] = new DetourState
+                {
+                    Detour = detourInstance,
+                    OriginalTarget = originalPtr,
+                    TrampolineDelegate = trampolineDelegate  // Keep delegate alive
+                };
+            }
+        }
+        else
+        {
+            // For regular methods, use MethodHandle
+            trampolinePtr = trampolineMethod.MethodHandle.GetFunctionPointer();
+
+            lock (Detours)
+            {
+                Detours[trampolinePtr] = new DetourState
+                {
+                    Detour = detourInstance,
+                    OriginalTarget = originalPtr
+                };
+            }
         }
 
         *target = trampolinePtr;
@@ -720,35 +762,69 @@ internal static class BootstrapShim
     private static LoaderConfig PrepareLoaderConfig()
     {
         var baseDir = GetBaseDirectory();
-        var configPath = Path.Combine(Path.Combine(baseDir, "UserData"), "Loader.cfg");
         LoaderConfig config = new();
 
-        if (File.Exists(configPath))
+        // Apply BepInEx config values if available
+        if (_bepInExConfig != null)
         {
-            try
+            // Loader settings
+            SetInternalProperty(config.Loader, "Disable", _bepInExConfig.DisableMods.Value);
+            SetInternalProperty(config.Loader, "DebugMode", _bepInExConfig.DebugMode.Value);
+            SetInternalProperty(config.Loader, "CapturePlayerLogs", _bepInExConfig.CapturePlayerLogs.Value);
+            SetInternalProperty(config.Loader, "ForceQuit", _bepInExConfig.ForceQuit.Value);
+            SetInternalProperty(config.Loader, "DisableStartScreen", _bepInExConfig.DisableStartScreen.Value);
+            SetInternalProperty(config.Loader, "LaunchDebugger", _bepInExConfig.LaunchDebugger.Value);
+
+            // Parse HarmonyLogLevel enum
+            if (TryParseEnum<LoaderConfig.CoreConfig.HarmonyLogVerbosity>(_bepInExConfig.HarmonyLogLevel.Value, true, out var harmonyLevel))
             {
-                var document = TomlParser.ParseFile(configPath);
-                config = TomletMain.To<LoaderConfig>(document) ?? config;
+                SetInternalProperty(config.Loader, "HarmonyLogLevel", harmonyLevel);
             }
-            catch (Exception ex)
+
+            // Parse ConsoleTheme enum
+            if (TryParseEnum<LoaderConfig.CoreConfig.LoaderTheme>(_bepInExConfig.ConsoleTheme.Value, true, out var theme))
             {
-                Log.LogWarning($"Failed to parse Loader.cfg: {ex.Message}");
+                SetInternalProperty(config.Loader, "Theme", theme);
             }
+
+            // Console settings
+            SetInternalProperty(config.Console, "HideWarnings", _bepInExConfig.HideWarnings.Value);
+            SetInternalProperty(config.Console, "HideConsole", _bepInExConfig.HideConsole.Value);
+            SetInternalProperty(config.Console, "ConsoleOnTop", _bepInExConfig.ConsoleOnTop.Value);
+            SetInternalProperty(config.Console, "DontSetTitle", _bepInExConfig.DontSetTitle.Value);
+
+            // Logs settings
+            SetInternalProperty(config.Logs, "MaxLogs", _bepInExConfig.MaxLogs.Value);
+
+            // Mono Debug Server settings
+            SetInternalProperty(config.MonoDebugServer, "DebugSuspend", _bepInExConfig.DebugSuspend.Value);
+            SetInternalProperty(config.MonoDebugServer, "DebugIPAddress", _bepInExConfig.DebugIPAddress.Value);
+            SetInternalProperty(config.MonoDebugServer, "DebugPort", _bepInExConfig.DebugPort.Value);
+
+            // Unity Engine settings
+            if (!string.IsNullOrEmpty(_bepInExConfig.UnityVersionOverride.Value))
+            {
+                SetInternalProperty(config.UnityEngine, "VersionOverride", _bepInExConfig.UnityVersionOverride.Value);
+            }
+            SetInternalProperty(config.UnityEngine, "DisableConsoleLogCleaner", _bepInExConfig.DisableConsoleLogCleaner.Value);
+            if (!string.IsNullOrEmpty(_bepInExConfig.MonoSearchPathOverride.Value))
+            {
+                SetInternalProperty(config.UnityEngine, "MonoSearchPathOverride", _bepInExConfig.MonoSearchPathOverride.Value);
+            }
+            SetInternalProperty(config.UnityEngine, "ForceOfflineGeneration", _bepInExConfig.ForceOfflineGeneration.Value);
+            if (!string.IsNullOrEmpty(_bepInExConfig.ForceGeneratorRegex.Value))
+            {
+                SetInternalProperty(config.UnityEngine, "ForceGeneratorRegex", _bepInExConfig.ForceGeneratorRegex.Value);
+            }
+            if (!string.IsNullOrEmpty(_bepInExConfig.ForceGeneratorVersion.Value))
+            {
+                SetInternalProperty(config.UnityEngine, "ForceGeneratorVersion", _bepInExConfig.ForceGeneratorVersion.Value);
+            }
+            SetInternalProperty(config.UnityEngine, "EnableAssemblyGeneration", _bepInExConfig.EnableAssemblyGeneration.Value);
         }
 
         SetInternalProperty(config.Loader, "BaseDirectory", baseDir);
         ApplyLaunchOverrides(config);
-
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
-            var output = TomletMain.TomlStringFrom(config);
-            File.WriteAllText(configPath, output);
-        }
-        catch (Exception ex)
-        {
-            Log.LogWarning($"Failed to write Loader.cfg: {ex.Message}");
-        }
 
         return config;
     }

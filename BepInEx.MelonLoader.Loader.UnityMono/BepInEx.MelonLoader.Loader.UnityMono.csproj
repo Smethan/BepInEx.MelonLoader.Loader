@@ -29,11 +29,12 @@
         <PackageReference Include="BepInEx.BaseLib" Version="5.4.21" IncludeAssets="compile" />
     </ItemGroup>
     <ItemGroup Condition="'$(Configuration)' == 'BepInEx6'">
-        <PackageReference Include="BepInEx.Unity" Version="6.0.0-be.572" IncludeAssets="compile" />
+        <PackageReference Include="BepInEx.Unity" Version="6.0.0-pre.1" IncludeAssets="compile" />
     </ItemGroup>
 
     <ItemGroup>
         <Compile Include="..\Shared\BootstrapShim.cs" Link="Shared/BootstrapShim.cs" />
         <Compile Include="..\Shared\ArgParser.cs" Link="Shared/ArgParser.cs" />
+        <Compile Include="..\Shared\MelonLoaderConfig.cs" Link="Shared/MelonLoaderConfig.cs" />
     </ItemGroup>
 </Project>
