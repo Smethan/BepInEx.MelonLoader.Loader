@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <TargetFramework>netstandard2.1</TargetFramework>
+        <TargetFramework>net6.0</TargetFramework>
         <AssemblyName>BepInEx.MelonLoader.Loader.IL2CPP</AssemblyName>
         <Description>MelonLoader loader for Il2Cpp games</Description>
         <Version>2.1.0</Version>
@@ -14,7 +14,7 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="BepInEx.IL2CPP" Version="6.0.0-be.572" IncludeAssets="compile" />
+        <PackageReference Include="BepInEx.Unity.IL2CPP" Version="6.0.0-be.738" IncludeAssets="compile" />
         <PackageReference Include="BepInEx.PluginInfoProps" Version="1.1.0" />
         <PackageReference Include="LavaGang.MelonLoader" Version="0.7.1" IncludeAssets="compile" />
         <PackageReference Include="MonoMod.RuntimeDetour" Version="22.7.31.1" IncludeAssets="compile" />

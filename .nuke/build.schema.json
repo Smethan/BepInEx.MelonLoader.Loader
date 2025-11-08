@@ -66,6 +66,7 @@
             "enum": [
               "Clean",
               "Compile",
+              "DevDeploy",
               "DownloadDependencies"
             ]
           }
@@ -78,6 +79,7 @@
             "enum": [
               "Clean",
               "Compile",
+              "DevDeploy",
               "DownloadDependencies"
             ]
           }

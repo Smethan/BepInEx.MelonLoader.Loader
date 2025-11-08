@@ -26,6 +26,103 @@ class Build : NukeBuild
     private AbsolutePath OutputDir => RootDirectory / "Output";
     private AbsolutePath MelonloaderFilesPath => OutputDir / "MelonLoader";
 
+    private static void Bash(string command)
+    {
+        var process = new System.Diagnostics.Process
+        {
+            StartInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "/bin/bash",
+                Arguments = $"-c \"{command.Replace("\"", "\\\"")}\"",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            }
+        };
+        process.Start();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+        {
+            var error = process.StandardError.ReadToEnd();
+            throw new Exception($"Bash command failed: {command}\n{error}");
+        }
+    }
+
+    private static string ConvertToWindowsPath(string wslPath)
+    {
+        if (wslPath.StartsWith("/mnt/c/"))
+        {
+            // Windows path mounted in WSL, convert to C:\...
+            return "C:\\" + wslPath.Substring("/mnt/c/".Length).Replace("/", "\\");
+        }
+        else if (wslPath.StartsWith("/"))
+        {
+            // WSL filesystem path, use \\wsl.localhost\Ubuntu-22.04\...
+            return "\\\\wsl.localhost\\Ubuntu-22.04" + wslPath.Replace("/", "\\");
+        }
+        return wslPath.Replace("/", "\\");
+    }
+
+    private static void CreateWindowsLink(AbsolutePath linkPath, AbsolutePath targetPath, bool isDirectory = false)
+    {
+        var windowsLinkPath = ConvertToWindowsPath(linkPath);
+        var windowsTargetPath = ConvertToWindowsPath(targetPath);
+
+        System.Diagnostics.Process process;
+
+        if (isDirectory)
+        {
+            // Use junction for directories (doesn't require admin privileges)
+            // cmd.exe /c mklink /J "link" "target"
+            process = new System.Diagnostics.Process
+            {
+                StartInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = $"/c mklink /J \"{windowsLinkPath}\" \"{windowsTargetPath}\"",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+        }
+        else
+        {
+            // Use hard link for files (doesn't require admin privileges)
+            // Escape single quotes in paths by doubling them for PowerShell
+            var escapedLinkPath = windowsLinkPath.Replace("'", "''");
+            var escapedTargetPath = windowsTargetPath.Replace("'", "''");
+
+            var psCommand = $"New-Item -ItemType HardLink -Path '{escapedLinkPath}' -Target '{escapedTargetPath}' -Force";
+
+            process = new System.Diagnostics.Process
+            {
+                StartInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "powershell.exe",
+                    Arguments = $"-Command \"{psCommand.Replace("\"", "`\"\"")}\"",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+        }
+
+        process.Start();
+        var output = process.StandardOutput.ReadToEnd();
+        var error = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+
+        if (process.ExitCode != 0)
+        {
+            var linkType = isDirectory ? "junction" : "hard link";
+            throw new Exception($"Failed to create {linkType}: {windowsLinkPath} -> {windowsTargetPath}\n{error}\n{output}");
+        }
+    }
+
     Target DownloadDependencies => _ => _
 	    .After(Clean)
 	    .Executes(async () =>
@@ -63,9 +160,10 @@ class Build : NukeBuild
     private void HandleBuild(string projectSubname, string framework, string configuration, bool il2cpp)
     {
 	    var stagingDirectory = OutputDir / "staging";
-	    var stagingBepInExPath = stagingDirectory / "BepInEx" / "plugins";
-	    var stagingPluginPath = stagingBepInExPath / "BepInEx.MelonLoader.Loader";
-	    var stagingMLPath = stagingDirectory / "MLLoader";
+	    // Create BepInEx/plugins structure (r2modman will extract BepInEx folder to profile root)
+	    var stagingBepInExPlugins = stagingDirectory / "BepInEx" / "plugins";
+	    var stagingPluginPath = stagingBepInExPlugins / "BepInEx.MelonLoader.Loader";
+	    var stagingMLPath = stagingBepInExPlugins / "MLLoader";
 
 	    stagingPluginPath.CreateOrCleanDirectory();
 	    stagingMLPath.CreateOrCleanDirectory();
@@ -135,8 +233,9 @@ class Build : NukeBuild
 		stagingDirectory.GlobFiles("**/*.mdb").DeleteFiles();
 		stagingDirectory.GlobFiles("**/*.dll.mdb").DeleteFiles();
 
-		// Remove .NET dependency files (not needed for Unity/Mono runtime)
-		stagingDirectory.GlobFiles("**/*.deps.json").DeleteFiles();
+		// Remove .NET dependency files from plugins folder (not needed for Unity/Mono runtime)
+		// BUT preserve deps.json in MLLoader/MelonLoader/Dependencies (required for Generator)
+		stagingPluginPath.GlobFiles("**/*.deps.json").DeleteFiles();
 
 		stagingDirectory.ZipTo(OutputDir / $"MLLoader-{projectSubname}-{configuration}-{MLVersionName}.zip");
 		stagingDirectory.DeleteDirectory();
@@ -148,8 +247,86 @@ class Build : NukeBuild
 	    {
 			HandleBuild("UnityMono", "net35", "BepInEx5", false);
 			HandleBuild("UnityMono", "net35", "BepInEx6", false);
-			HandleBuild("IL2CPP", "netstandard2.1", "BepInEx6", true);
+			HandleBuild("IL2CPP", "net6.0", "BepInEx6", true);
 
 			MelonloaderFilesPath.DeleteDirectory();
 	    });
+
+    Target DevDeploy => _ => _
+        .DependsOn(DownloadDependencies)
+        .Executes(() =>
+        {
+            // NOTE: Symlinks/hardlinks don't work when repo is in WSL and target is on Windows C: drive
+            // To enable linking: move repo to /mnt/c/... (Windows filesystem) and update CreateWindowsLink calls
+            // For now, we copy files which still provides fast rebuild-and-deploy workflow
+
+            // Build only IL2CPP for development
+            var projectSubname = "IL2CPP";
+            var framework = "net6.0";
+            var configuration = "BepInEx6";
+
+            var projectPath = RootDirectory / $"{ProjectName}.{projectSubname}" / $"{ProjectName}.{projectSubname}.csproj";
+            var outputPath = RootDirectory / $"{ProjectName}.{projectSubname}" / "Output" / configuration / projectSubname;
+
+            DotNetTasks.DotNetBuild(x =>
+                x.SetProjectFile(projectPath)
+                .SetConfiguration(configuration)
+                .SetFramework(framework));
+
+            // r2modman profile path
+            var r2modmanPath = AbsolutePath.Create("/mnt/c/Users/Ethan/AppData/Roaming/r2modmanPlus-local/Megabonk/profiles/Default/BepInEx/plugins");
+            var deployPath = r2modmanPath / "ElectricEspeon-MelonLoader_Loader";
+
+            // Clean and create deploy directories
+            if (deployPath.DirectoryExists())
+                deployPath.DeleteDirectory();
+            deployPath.CreateDirectory();
+
+            var pluginDeployPath = deployPath / "BepInEx.MelonLoader.Loader";
+            var mlDeployPath = deployPath / "MLLoader";
+
+            pluginDeployPath.CreateDirectory();
+            (mlDeployPath / "MelonLoader").CreateDirectory();
+            (mlDeployPath / "Mods").CreateDirectory();
+            (mlDeployPath / "Plugins").CreateDirectory();
+            (mlDeployPath / "UserData").CreateDirectory();
+            (mlDeployPath / "UserLibs").CreateDirectory();
+
+            // Copy plugin DLLs
+            Serilog.Log.Information("Copying plugin DLLs...");
+            foreach (var file in outputPath.GlobFiles("*.dll"))
+            {
+                Serilog.Log.Information($"  Copying {file.Name}");
+                CopyFileToDirectory(file, pluginDeployPath, FileExistsPolicy.Overwrite);
+            }
+
+            // Copy MelonLoader dependencies
+            var sourceMLPath = MelonloaderFilesPath / "MelonLoader";
+            var melonLoaderDll = sourceMLPath / (framework == "net6.0" ? "net6" : "net35") / "MelonLoader.dll";
+            Serilog.Log.Information("Copying MelonLoader.dll...");
+            CopyFileToDirectory(melonLoaderDll, pluginDeployPath, FileExistsPolicy.Overwrite);
+
+            // Copy other required DLLs
+            var supportDlls = new[] { "0Harmony.dll", "AssetRipper.Primitives.dll", "AssetsTools.NET.dll", "Tomlet.dll", "WebSocketDotNet.dll", "bHapticsLib.dll" };
+            foreach (var dll in supportDlls)
+            {
+                var sourceDll = sourceMLPath / (framework == "net6.0" ? "net6" : "net35") / dll;
+                if (sourceDll.FileExists())
+                {
+                    Serilog.Log.Information($"  Copying {dll}");
+                    CopyFileToDirectory(sourceDll, pluginDeployPath, FileExistsPolicy.Overwrite);
+                }
+            }
+
+            // Copy MelonLoader Dependencies folder
+            Serilog.Log.Information("Copying MelonLoader Dependencies...");
+            var sourceDepsPath = sourceMLPath / "Dependencies";
+            var targetDepsPath = mlDeployPath / "MelonLoader" / "Dependencies";
+            CopyDirectoryRecursively(sourceDepsPath, targetDepsPath, DirectoryExistsPolicy.Merge, FileExistsPolicy.Overwrite);
+
+            Serilog.Log.Information($"✓ Development deployment complete!");
+            Serilog.Log.Information($"  Plugin DLLs copied to: {pluginDeployPath}");
+            Serilog.Log.Information($"  MelonLoader files copied to: {mlDeployPath}");
+            Serilog.Log.Information($"  Run './build.sh DevDeploy' after code changes to quickly redeploy");
+        });
 }
