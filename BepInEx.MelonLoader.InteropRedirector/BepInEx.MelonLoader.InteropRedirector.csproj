@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net6.0</TargetFramework>
+        <AssemblyName>BepInEx.MelonLoader.InteropRedirector</AssemblyName>
+        <Description>Pre-patcher that redirects assembly resolution to MelonLoader's enhanced IL2CPP assemblies</Description>
+        <Version>1.0.0</Version>
+        <LangVersion>latest</LangVersion>
+        <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+        <OutputPath>..\Output\Patcher\</OutputPath>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- BepInEx preloader dependencies for BepInEx 6 -->
+        <PackageReference Include="BepInEx.Core" Version="6.0.0-be.738" IncludeAssets="compile" />
+        <PackageReference Include="BepInEx.Preloader.Core" Version="6.0.0-be.738" IncludeAssets="compile" />
+
+        <!-- Mono.Cecil is available in preloader context -->
+        <PackageReference Include="Mono.Cecil" Version="0.11.4" IncludeAssets="compile" />
+    </ItemGroup>
+
+</Project>

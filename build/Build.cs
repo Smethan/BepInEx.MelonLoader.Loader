@@ -123,6 +123,52 @@ class Build : NukeBuild
         }
     }
 
+    /// <summary>
+    /// Patches Il2CppAssemblyGenerator.dll to change Il2CppPrefixMode from OptOut to OptIn.
+    /// This makes generated assemblies have NO Il2Cpp namespace prefix, making them
+    /// compatible with BepInEx mods that expect non-prefixed types.
+    /// </summary>
+    async Task PatchIl2CppAssemblyGenerator()
+    {
+        Serilog.Log.Information("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        Serilog.Log.Information("Patching Il2CppAssemblyGenerator...");
+
+        var generatorDll = MelonloaderFilesPath / "MelonLoader" / "Dependencies" /
+                           "Il2CppAssemblyGenerator" / "Il2CppAssemblyGenerator.dll";
+        var patchedDll = RootDirectory / "Dependencies" / "Il2CppAssemblyGenerator.Patched.dll";
+        var patcherProject = RootDirectory / "Tools" / "AssemblyPatcher" / "PatchAssemblyGenerator.csproj";
+
+        if (!File.Exists(generatorDll))
+        {
+            Serilog.Log.Error($"Il2CppAssemblyGenerator.dll not found at: {generatorDll}");
+            throw new FileNotFoundException("Il2CppAssemblyGenerator.dll not found after MelonLoader extraction");
+        }
+
+        // Build the patcher tool
+        Serilog.Log.Information("Building AssemblyPatcher tool...");
+        DotNetTasks.DotNetBuild(s => s
+            .SetProjectFile(patcherProject)
+            .SetConfiguration("Release")
+            .SetVerbosity(DotNetVerbosity.Minimal));
+
+        // Run the patcher
+        Serilog.Log.Information("Running patcher on Il2CppAssemblyGenerator.dll...");
+        DotNetTasks.DotNetRun(s => s
+            .SetProjectFile(patcherProject)
+            .SetConfiguration("Release")
+            .SetApplicationArguments($"\"{generatorDll}\" \"{patchedDll}\""));
+
+        if (!File.Exists(patchedDll))
+        {
+            Serilog.Log.Error("Patched DLL was not created");
+            throw new FileNotFoundException("Assembly patching failed - output file not created");
+        }
+
+        Serilog.Log.Information("  ✓ Il2CppAssemblyGenerator patched successfully");
+        Serilog.Log.Information("  ✓ Assemblies will be generated WITHOUT Il2Cpp namespace prefix");
+        Serilog.Log.Information("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    }
+
     Target DownloadDependencies => _ => _
 	    .After(Clean)
 	    .Executes(async () =>
@@ -143,6 +189,9 @@ class Build : NukeBuild
 			MelonloaderFilesPath.CreateOrCleanDirectory();
 		    ZipFile.ExtractToDirectory(zipPath, MelonloaderFilesPath);
 		    zipPath.DeleteFile();
+
+		    // Automatically patch Il2CppAssemblyGenerator after extraction
+		    await PatchIl2CppAssemblyGenerator();
 	    });
 
     Target Clean => _ => _
@@ -156,6 +205,21 @@ class Build : NukeBuild
 
 		    OutputDir.CreateOrCleanDirectory();
 	    });
+
+    Target CompileInteropRedirector => _ => _
+        .DependsOn(Clean)
+        .Executes(() =>
+        {
+            Serilog.Log.Information("Compiling InteropRedirector pre-patcher...");
+
+            DotNetTasks.DotNetBuild(s => s
+                .SetProjectFile(RootDirectory / "BepInEx.MelonLoader.InteropRedirector" / "BepInEx.MelonLoader.InteropRedirector.csproj")
+                .SetConfiguration("Release")
+                .SetFramework("net6.0")
+                .SetVerbosity(DotNetVerbosity.Minimal));
+
+            Serilog.Log.Information("  ✓ InteropRedirector compiled successfully");
+        });
 
     private void HandleBuild(string projectSubname, string framework, string configuration, bool il2cpp)
     {
@@ -237,12 +301,29 @@ class Build : NukeBuild
 		// BUT preserve deps.json in MLLoader/MelonLoader/Dependencies (required for Generator)
 		stagingPluginPath.GlobFiles("**/*.deps.json").DeleteFiles();
 
+		// Copy InteropRedirector pre-patcher for IL2CPP builds
+		if (il2cpp)
+		{
+			var patcherSource = RootDirectory / "Output" / "Patcher" / "BepInEx.MelonLoader.InteropRedirector.dll";
+			if (File.Exists(patcherSource))
+			{
+				var patchersDir = stagingDirectory / "BepInEx" / "patchers";
+				patchersDir.CreateDirectory();
+				CopyFileToDirectory(patcherSource, patchersDir);
+				Serilog.Log.Information("  ✓ InteropRedirector pre-patcher packaged");
+			}
+			else
+			{
+				Serilog.Log.Warning($"InteropRedirector not found at: {patcherSource}");
+			}
+		}
+
 		stagingDirectory.ZipTo(OutputDir / $"MLLoader-{projectSubname}-{configuration}-{MLVersionName}.zip");
 		stagingDirectory.DeleteDirectory();
     }
 
     Target Compile => _ => _
-	    .DependsOn(DownloadDependencies, Clean)
+	    .DependsOn(DownloadDependencies, Clean, CompileInteropRedirector)
         .Executes(() =>
 	    {
 			HandleBuild("UnityMono", "net35", "BepInEx5", false);
@@ -253,7 +334,7 @@ class Build : NukeBuild
 	    });
 
     Target DevDeploy => _ => _
-        .DependsOn(DownloadDependencies)
+        .DependsOn(DownloadDependencies, CompileInteropRedirector)
         .Executes(() =>
         {
             // NOTE: Symlinks/hardlinks don't work when repo is in WSL and target is on Windows C: drive
@@ -334,9 +415,30 @@ class Build : NukeBuild
                 Serilog.Log.Information("  ✓ Patched generator will create assemblies without Il2Cpp prefix");
             }
 
+            // Deploy InteropRedirector pre-patcher
+            var patcherSource = RootDirectory / "Output" / "Patcher" / "BepInEx.MelonLoader.InteropRedirector.dll";
+            if (patcherSource.FileExists())
+            {
+                Serilog.Log.Information("Deploying InteropRedirector pre-patcher...");
+
+                // r2modman profile structure: BepInEx/patchers/ sits at the same level as BepInEx/plugins/
+                var patchersDeployPath = r2modmanPath.Parent / "patchers";
+                patchersDeployPath.CreateDirectory();
+
+                CopyFileToDirectory(patcherSource, patchersDeployPath, FileExistsPolicy.Overwrite);
+                Serilog.Log.Information($"  ✓ InteropRedirector deployed to: {patchersDeployPath}");
+                Serilog.Log.Information("  ✓ Assembly resolution will redirect to MelonLoader IL2CPP assemblies");
+            }
+            else
+            {
+                Serilog.Log.Warning($"InteropRedirector not found at: {patcherSource}");
+                Serilog.Log.Warning("  Pre-patcher was not deployed - this may cause compatibility issues");
+            }
+
             Serilog.Log.Information($"✓ Development deployment complete!");
-            Serilog.Log.Information($"  Plugin DLLs copied to: {pluginDeployPath}");
-            Serilog.Log.Information($"  MelonLoader files copied to: {mlDeployPath}");
+            Serilog.Log.Information($"  Plugin DLLs deployed to: {pluginDeployPath}");
+            Serilog.Log.Information($"  MelonLoader files deployed to: {mlDeployPath}");
+            Serilog.Log.Information($"  InteropRedirector patcher deployed to: {r2modmanPath.Parent / "patchers"}");
             Serilog.Log.Information($"  Run './build.sh DevDeploy' after code changes to quickly redeploy");
         });
 }
