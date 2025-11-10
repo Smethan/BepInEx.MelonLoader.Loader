@@ -71,6 +71,45 @@ public class Plugin : BasePlugin
 
         BootstrapShim.EnsureInitialized();
         BootstrapShim.SetBepInExConfig(bepInExConfig);
-        BootstrapShim.RunMelonLoader(message => Log.LogError(message));
+
+        // Defer MelonLoader initialization until all BepInEx plugins have loaded
+        // This prevents MelonLoader's Il2CppInterop patches from breaking other BepInEx plugins' Harmony patches
+        Log.LogInfo("Waiting for all BepInEx plugins to load before initializing MelonLoader...");
+
+        IL2CPPChainloader.Instance.Finished += () =>
+        {
+            Log.LogInfo("===== ALL BEPINEX PLUGINS LOADED =====");
+            Log.LogInfo("Initializing MelonLoader now...");
+            BootstrapShim.RunMelonLoader(message => Log.LogError(message));
+            Log.LogInfo("MelonLoader initialization complete.");
+
+            // Notify InteropRedirector that assemblies are now available (via reflection to avoid circular dependency)
+            try
+            {
+                Log.LogInfo("Notifying InteropRedirector that MelonLoader assemblies are ready...");
+                var interopRedirectorType = System.Type.GetType("BepInEx.MelonLoader.InteropRedirector.InteropRedirectorPatcher, BepInEx.MelonLoader.InteropRedirector");
+                if (interopRedirectorType != null)
+                {
+                    var notifyMethod = interopRedirectorType.GetMethod("NotifyMelonLoaderReady", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                    if (notifyMethod != null)
+                    {
+                        notifyMethod.Invoke(null, null);
+                        Log.LogInfo("InteropRedirector notification sent successfully");
+                    }
+                    else
+                    {
+                        Log.LogWarning("NotifyMelonLoaderReady method not found on InteropRedirectorPatcher");
+                    }
+                }
+                else
+                {
+                    Log.LogDebug("InteropRedirectorPatcher type not found (may not be installed)");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Log.LogWarning($"Failed to notify InteropRedirector: {ex.Message}");
+            }
+        };
     }
 }
