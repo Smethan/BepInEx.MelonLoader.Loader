@@ -432,3 +432,57 @@ tmp/
 Thunderstore/
 .DS_Store
 MelonLoader-upstream/*
+
+# === BepInEx.MelonLoader.Loader Project Specific ===
+
+# Per-project output directories (root Output/ already ignored above)
+**/Output/
+
+# Backup and temporary files
+*.original
+*.backup
+*.bak
+
+# Development notes and conversation logs
+AssemblyPatchConvo.txt
+
+# Nuke build system temporary files
+.nuke/build.schema.json
+.nuke/parameters.json
+
+# Session-specific .claude/ files (ephemeral, not tracked)
+.claude/context/active/
+.claude/context/archive/
+.claude/.session_counter
+
+# Legacy session files (from old structure)
+.claude/CONTEXT_CAPTURED.txt
+.claude/*_SUMMARY_*.md
+.claude/*_STATE_*.md
+.claude/*_NOTES_*.md
+.claude/*_PLAN_*.md
+.claude/*_ANALYSIS_*.md
+.claude/*_INVESTIGATION_*.md
+.claude/*_IMPLEMENTATION_*.md
+.claude/*_RELEASE_*.md
+.claude/SESSION_*.md
+.claude/START_HERE_*.md
+.claude/DELIVERABLES_*.md
+.claude/DOCUMENTATION_*.md
+.claude/QUICK_REFERENCE.md
+.claude/SNAPSHOT_INDEX.md
+.claude/install-*.sh
+.claude/session-*.md
+
+# Keep important .claude files (tracked in git)
+!.claude/CLAUDE.md
+!.claude/PROJECT_STATUS.md
+!.claude/CONTEXT_MANAGEMENT_GUIDE.md
+!.claude/summary.md
+!.claude/project/
+!.claude/versions/
+!.claude/knowledge/
+!.claude/templates/
+!.claude/scripts/
+!.claude/commands/
+!.claude/agents/
