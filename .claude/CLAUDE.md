@@ -166,3 +166,16 @@ Claude: [Loads and summarizes session 5]
 -   **ALWAYS** use coordinator for multi-step problems
 -   **ANNOUNCE** that you are using coordinator: "Using coordinator to orchestrate X"
 -   **DO NOT** ask for permission, just use it when appropriate
+
+### CRITICAL: PULL REQUEST WORKFLOW
+
+When creating pull requests, **ALWAYS** follow this workflow:
+
+1.  **FIRST**: Run `/save-context --milestone` to preserve context
+2.  **WAIT**: Let milestone save complete successfully
+3.  **THEN**: Create the PR with `gh pr create`
+4.  **REPORT**: Confirm milestone saved and show PR URL
+
+**Why**: Every PR should have associated milestone documentation tracking the architectural decisions, version changes, and project state at that point in time.
+
+**Shortcut**: Use `/create-pr` command which handles the entire workflow automatically.
